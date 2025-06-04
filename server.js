@@ -4,19 +4,74 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
 const config = require('./config');
+const jwt = require('jsonwebtoken');
+const http = require('http');
+const socketIo = require('socket.io');
 
 // Load environment variables
 dotenv.config();
 
 // Create Express app
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: config.CLIENT_URL,
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
 
 // Middleware
 app.use(express.json());
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: config.CLIENT_URL,
   credentials: true
 }));
+
+// Socket.IO middleware for authentication
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) {
+    return next(new Error('Authentication error'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, config.JWT_SECRET);
+    socket.user = decoded.user;
+    next();
+  } catch (err) {
+    next(new Error('Authentication error'));
+  }
+});
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.user.id);
+
+  // Join user's personal room
+  socket.join(socket.user.id);
+
+  // Handle joining chat rooms
+  socket.on('joinChat', (chatId) => {
+    socket.join(chatId);
+  });
+
+  // Handle leaving chat rooms
+  socket.on('leaveChat', (chatId) => {
+    socket.leave(chatId);
+  });
+
+  // Handle new messages
+  socket.on('sendMessage', async (data) => {
+    const { chatId, message } = data;
+    io.to(chatId).emit('newMessage', message);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.user.id);
+  });
+});
 
 // Connect to MongoDB
 console.log('Attempting to connect to MongoDB...');
@@ -52,6 +107,7 @@ app.use('/api/cycle', require('./routes/cycle'));
 app.use('/api/health', require('./routes/health'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/profile', require('./routes/profile'));
+app.use('/api/chatbot', require('./routes/chatbot'));
 
 // Serve static assets in production
 if (config.NODE_ENV === 'production') {
@@ -71,8 +127,9 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(config.PORT, () => {
-  console.log(`Server running on port ${config.PORT}`);
+const PORT = config.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
   console.log('Environment:', config.NODE_ENV);
-  console.log('CORS enabled for:', 'http://localhost:3000');
+  console.log('CORS enabled for:', config.CLIENT_URL);
 }); 

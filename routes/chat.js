@@ -9,8 +9,14 @@ const User = require('../models/User');
 // @access  Private
 router.get('/', auth, async (req, res) => {
   try {
-    res.json({ message: 'Chat endpoint' });
+    const chats = await Chat.find({ participants: req.user.id })
+      .populate('participants', 'name email')
+      .populate('messages.sender', 'name')
+      .sort({ lastMessage: -1 });
+
+    res.json(chats);
   } catch (err) {
+    console.error('Error fetching chats:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -53,7 +59,7 @@ router.post('/', auth, async (req, res) => {
 
     res.json(chat);
   } catch (err) {
-    console.error(err.message);
+    console.error('Error creating chat:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -75,18 +81,25 @@ router.post('/:chatId/messages', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
-    chat.messages.push({
+    const message = {
       sender: req.user.id,
-      content
-    });
+      content,
+      timestamp: Date.now()
+    };
 
+    chat.messages.push(message);
     chat.lastMessage = Date.now();
     await chat.save();
 
     await chat.populate('messages.sender', 'name');
-    res.json(chat.messages[chat.messages.length - 1]);
+    const populatedMessage = chat.messages[chat.messages.length - 1];
+
+    // Emit the new message to all participants
+    req.app.get('io').to(req.params.chatId).emit('newMessage', populatedMessage);
+
+    res.json(populatedMessage);
   } catch (err) {
-    console.error(err.message);
+    console.error('Error sending message:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -110,7 +123,7 @@ router.get('/:chatId/messages', auth, async (req, res) => {
 
     res.json(chat.messages);
   } catch (err) {
-    console.error(err.message);
+    console.error('Error fetching messages:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
